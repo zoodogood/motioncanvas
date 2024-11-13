@@ -1,18 +1,32 @@
 import { Layout, makeScene2D, Rect, Txt, View2D } from "@motion-canvas/2d";
 import {
+  all,
   createRef,
-  debug,
   easeInOutCubic,
+  easeInQuint,
+  easeOutQuint,
+  linear,
   map,
   tween,
+  waitFor,
 } from "@motion-canvas/core";
 
-const RECTS = 36;
-const PER_RECT = to_radians(360 / RECTS);
-const SIZE = 50;
-const DISTANCE = (RECTS * 5) / (SIZE / 10) + 300;
-const STRECHING_DISTANCE = DISTANCE;
-const MOVE_PER_TICK = 3;
+function my_ease_in_out(value: number) {
+  const { min } = Math;
+  const linear_ = linear(value) * 0.5;
+  const starts = min(easeOutQuint(value * 4), 0.25);
+  const ends = value > 0.75 ? min(easeInQuint((value - 0.75) * 4), 0.25) : 0;
+  return linear_ + starts + ends;
+}
+
+const rects_count = 144;
+const rect_size = 30;
+const rects_gap = to_radians(360 / rects_count);
+const radius = (rects_count * 5) / (rect_size / 10) + 300;
+// Дальность появления от центра
+const rect_appearance_spring = radius;
+const rects_at_time = 3;
+const duration_of_queue = rects_count / 12; /* Seconds */
 
 function to_radians(angle: number) {
   return angle * (Math.PI / 180);
@@ -20,71 +34,78 @@ function to_radians(angle: number) {
 function from_radians(angle: number) {
   return angle / (Math.PI / 180);
 }
-function mod(value: number, mod: number) {
+function truncate(value: number, mod: number) {
   return value - (value % mod);
 }
-function createRect(view: View2D, item: number) {
+function createRect(view: View2D, item: number, duration: number) {
   const rect = createRef<Rect>();
   view.add(
     <Rect
       ref={rect}
-      size={SIZE}
-      fill={`hsl(${from_radians(item * PER_RECT)}, 30%, 60%)`}
+      size={rect_size}
+      fill={`hsl(${from_radians(item * rects_gap)}, 30%, 60%)`}
     />
   );
-  const force_x = Math.cos(item * PER_RECT);
-  const force_y = Math.sin(item * PER_RECT);
+  const force_x = Math.cos(item * rects_gap);
+  const force_y = Math.sin(item * rects_gap);
 
-  return tween(0.5, (value) => {
+  /* min duration */
+  duration += 1 /* Second */ / 20 /* frames */;
+
+  return tween(duration, (value) => {
     value = easeInOutCubic(value);
     rect().position.x(
-      map(force_x * -STRECHING_DISTANCE, mod(force_x * DISTANCE, SIZE), value)
+      map(
+        force_x * -rect_appearance_spring,
+        truncate(force_x * radius, rect_size),
+        value
+      )
     );
     rect().position.y(
-      map(force_y * -STRECHING_DISTANCE, mod(force_y * DISTANCE, SIZE), value)
+      map(
+        force_y * -rect_appearance_spring,
+        truncate(force_y * radius, rect_size),
+        value
+      )
     );
   });
 }
 export default makeScene2D(function* (view) {
   view.add(
     <Layout layout direction={"column"}>
-      <Txt text={PER_RECT * RECTS + " 2Math.PI"} />
-      <Txt text={Math.cos(PER_RECT * 0) + " Math.cos"} />
-      <Txt text={Math.sin(PER_RECT * 0) + " Math.sin"} />
+      <Txt text={rects_gap * rects_count + " 2Math.PI"} />
+      <Txt text={Math.cos(rects_gap * 0) + " Math.cos"} />
+      <Txt text={Math.sin(rects_gap * 0) + " Math.sin"} />
     </Layout>
   );
 
-  const items = [...new Array(RECTS)].map((_, i) => i);
+  yield;
 
-  const buffer: [View2D, number][] = [];
-  const thread = tween(1, function (value) {
-    value = easeInOutCubic(value) * RECTS - 1;
-    if (!items.length) {
-      return;
-    }
-    if (value < (items[MOVE_PER_TICK - 1] || items.at(-1))) {
-      return;
-    }
+  const groups = [...new Array(rects_count / rects_at_time)]
+    .map(
+      (_, i) =>
+        [my_ease_in_out(i / (rects_count / rects_at_time)), i] as [
+          number,
+          number
+        ]
+    )
+    .reduce((acc, [timeline, group_index], i, array) => {
+      const previous_timeline = array[i - 1]?.[0] ?? 0;
 
-    buffer.push(
-      ...items
-        .splice(0, MOVE_PER_TICK)
-        .map((item) => [view, item] as [View2D, number])
+      const group = [...new Array(rects_at_time)].map(
+        (_, i) => group_index * rects_at_time + i
+      );
+      return acc.concat([[timeline - previous_timeline, group]]);
+    }, [] as [number, number[]][]);
+
+  for (const [timeline, group] of groups) {
+    yield* waitFor((timeline * duration_of_queue) / rects_at_time);
+    yield* all(
+      ...group.map((item) =>
+        createRect(view, item, timeline * duration_of_queue)
+      )
     );
-  });
-
-  for (const _ of thread) {
-    yield;
-    if (!buffer.length) {
-      continue;
-    }
   }
 
-  //   // yield* all(
-  //   //   ...buffer
-  //   //     .splice(0, buffer.length)
-  //   //     .map(([view, item]) => createRect(view, item))
-  //   // );
-  // yield* waitFor(7);
-  debug("123");
+  yield* waitFor(2);
 });
